@@ -9,7 +9,6 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
-import android.os.Bundle;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
@@ -20,19 +19,23 @@ import android.widget.ListView;
 import android.widget.Toast;
 
 import java.io.FileNotFoundException;
-import java.lang.reflect.Array;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 import android.content.Context;
 import android.os.Environment;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.util.Locale;
+
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.Response;
 
 public class MainActivity extends AppCompatActivity {
     private File file;
@@ -41,7 +44,8 @@ public class MainActivity extends AppCompatActivity {
     private ListView list;
     final int PERMISSION=1;
     private Boolean isReceiverRegistered=false;
-    private Boolean isManuallyTriggered= false;
+    private Boolean isScanManuallyTriggered= false;
+    private JSONObject currentCoordinates=null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState)
@@ -98,8 +102,30 @@ public class MainActivity extends AppCompatActivity {
         startScan.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                isManuallyTriggered=true;
-                wifiManager.startScan();
+                isScanManuallyTriggered=true;
+                ApiClient.getCoordinates().enqueue(new Callback() {
+                    @Override
+                    public void onFailure(Call call, IOException e) {
+                        Log.i("Main Activity","Failed to get coordinates");
+                        e.printStackTrace();
+                    }
+
+                    @Override
+                    public void onResponse(Call call, Response response) throws IOException {
+                        try
+                        {
+                            Log.i("Main Activity","Sent request for location");
+                            String res= response.body().string();
+                            Log.i("Main Activity",res);
+                            currentCoordinates = new JSONObject(res);
+                            wifiManager.startScan();
+                        }
+                        catch (JSONException e)
+                        {
+                            e.printStackTrace();
+                        }
+                    }
+                });
             }
         });
         list= (ListView)findViewById(R.id.list);
@@ -107,7 +133,7 @@ public class MainActivity extends AppCompatActivity {
         {
             public void onReceive(Context c, Intent intent)
             {
-                if(isManuallyTriggered)
+                if(isScanManuallyTriggered)
                 {
                     List<ScanResult> wifiScanList = wifiManager.getScanResults();
                     Log.i("Main Activity",String.valueOf(wifiScanList.size()));
@@ -117,29 +143,35 @@ public class MainActivity extends AppCompatActivity {
                     FileOutputStream fOut = null;
                     try
                     {
-                        fOut = new FileOutputStream(file);
+                        fOut = new FileOutputStream(file,true);
                         OutputStreamWriter outputStreamWriter = new OutputStreamWriter(fOut);
-                        long unixTimestamp= System.currentTimeMillis()/1000;
+                        long timestamp = System.currentTimeMillis();
                         for(int i=0;i<wifiScanList.size();i++)
                         {
                             ScanResult result= wifiScanList.get(i);
-                            outputStreamWriter.append(unixTimestamp + " " + result.BSSID
-                                    + " " + 1.0 + " " + 2.0 + " " + result.level +"\n");
+
+                            if(currentCoordinates!=null)
+                            {
+                                outputStreamWriter.append(timestamp + " " + result.BSSID
+                                        + " " + currentCoordinates.getDouble("x")+ " "
+                                        + currentCoordinates.getDouble("y") + " " + result.level +"\n");
+                            }
+                            else
+                            {
+                                outputStreamWriter.append(timestamp + " " + result.BSSID
+                                        + " 1.0 " + "2.0 " + result.level +"\n");
+                            }
                         }
                         outputStreamWriter.close();
                         fOut.flush();
                         fOut.close();
                         Toast.makeText(MainActivity.this,"Scan Completed",Toast.LENGTH_SHORT).show();
                     }
-                    catch (FileNotFoundException e)
+                    catch (JSONException | IOException e)
                     {
                         e.printStackTrace();
                     }
-                    catch (IOException e)
-                    {
-                        e.printStackTrace();
-                    }
-                    isManuallyTriggered=false;
+                    isScanManuallyTriggered=false;
                 }
             }
         };
